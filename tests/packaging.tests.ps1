@@ -49,7 +49,11 @@ function Assert-NotContains {
 function New-TestMsix {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$PackageName
+        [Parameter(Mandatory)][string]$PackageName,
+        [string]$Executable = 'app/Codex.exe',
+        [string]$ApplicationEntryPoint = 'Windows.FullTrustApplication',
+        [string[]]$AdditionalExecutables = @(),
+        [switch]$OmitManifestExecutable
     )
 
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('N'))
@@ -73,16 +77,34 @@ function New-TestMsix {
     <Resource Language="en-US" />
   </Resources>
   <Applications>
-    <Application Id="App" Executable="app/Codex.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="Codex" Description="Codex" Square44x44Logo="assets/Square44x44Logo.png" Square150x150Logo="assets/Square150x150Logo.png" BackgroundColor="#3143FF" />
+    <Application Id="App" Executable="$Executable" EntryPoint="$ApplicationEntryPoint">
+      <uap:VisualElements DisplayName="ChatGPT" Description="ChatGPT" Square44x44Logo="assets/Square44x44Logo.png" Square150x150Logo="assets/Square150x150Logo.png" BackgroundColor="#3143FF" />
     </Application>
   </Applications>
 </Package>
 "@
 
     Set-Content -LiteralPath (Join-Path $root 'AppxManifest.xml') -Value $manifest -Encoding UTF8
-    Set-Content -LiteralPath (Join-Path $root 'app/Codex.exe') -Value 'fake binary' -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $root 'app/resources/app.asar') -Value 'fake payload' -Encoding ASCII
+
+    $testExecutables = @($AdditionalExecutables)
+    if (-not $OmitManifestExecutable) {
+        $testExecutables += $Executable
+    }
+    foreach ($testExecutable in ($testExecutables | Sort-Object -Unique)) {
+        $normalizedExecutable = $testExecutable.Replace('\', '/')
+        $segments = $normalizedExecutable.Split('/')
+        if (
+            $normalizedExecutable.StartsWith('app/', [System.StringComparison]::OrdinalIgnoreCase) -and
+            $normalizedExecutable.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not ($segments -contains '..') -and
+            -not ($segments -contains '.')
+        ) {
+            $executableFile = Join-Path $root $normalizedExecutable
+            New-Item -ItemType Directory -Path (Split-Path -Parent $executableFile) -Force | Out-Null
+            Set-Content -LiteralPath $executableFile -Value 'fake binary' -Encoding ASCII
+        }
+    }
 
     Add-Type -AssemblyName System.Drawing
     foreach ($asset in @(
@@ -141,13 +163,13 @@ function Test-ReadmeContent {
     }
 
     $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-    Assert-Contains $text '# Codex Windows' 'README must have a project title'
+    Assert-Contains $text '# ChatGPT Windows' 'README must have a project title'
     Assert-Contains $text '[\u4e00-\u9fff]' 'README must contain Chinese text'
     Assert-Contains $text '\u6bcf\u5c0f\u65f6|1\s*\u5c0f\u65f6|\u4e00\u5c0f\u65f6' 'README must document the hourly version check'
     Assert-Contains $text '\u6ca1\u6709\u65b0\u7248\u672c' 'README must document that scheduled runs stop when no new version exists'
     Assert-Contains $text 'zlib' 'README must document the zlib speed/size compression compromise'
     Assert-Contains $text 'Portable|portable' 'README must document the portable build artifact'
-    Assert-Contains $text 'CodexPortable-x64-' 'README must name the portable ZIP artifact'
+    Assert-Contains $text 'ChatGPTPortable-x64-' 'README must name the portable ZIP artifact'
     Assert-Contains $text '\u516c\u5171\u684c\u9762\u5feb\u6377\u65b9\u5f0f' 'README must document the all-users desktop shortcut'
 }
 
@@ -180,9 +202,29 @@ function Test-PreparePayloadScript {
         Assert-True ($metadata.PackageName -eq 'OpenAI.Codex') 'metadata PackageName must be OpenAI.Codex'
         Assert-True ($metadata.Version -eq '26.608.1337.0') 'metadata Version must come from AppxManifest.xml'
         Assert-True ($metadata.Architecture -eq 'x64') 'metadata Architecture must come from AppxManifest.xml'
-        Assert-True ($metadata.EntryPoint -eq 'app/Codex.exe') 'metadata EntryPoint must come from AppxManifest.xml'
+        Assert-True ($metadata.EntryPoint -eq 'app/Codex.exe') 'legacy metadata EntryPoint must come from AppxManifest.xml'
+        Assert-True ($metadata.ApplicationEntryPoint -eq 'Windows.FullTrustApplication') 'metadata must preserve the full-trust application entry point'
+        Assert-True ($metadata.ExecutablePath -eq 'Codex.exe') 'legacy metadata ExecutablePath must be relative to the payload root'
+        Assert-True ($metadata.ExecutableName -eq 'Codex.exe') 'legacy metadata ExecutableName must identify the manifest executable'
         Assert-True (-not [string]::IsNullOrWhiteSpace($metadata.MsixSha256)) 'metadata must include the MSIX SHA256'
         Assert-True (-not [string]::IsNullOrWhiteSpace($metadata.SignatureStatus)) 'metadata must include the Authenticode signature status'
+
+        $newMsix = Join-Path $temp 'OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0.Msix'
+        $newPayload = Join-Path $temp 'new-payload'
+        $newMetadataPath = Join-Path $temp 'new-metadata.json'
+        New-TestMsix `
+            -Path $newMsix `
+            -PackageName 'OpenAI.Codex' `
+            -Executable 'app/ChatGPT.exe' `
+            -AdditionalExecutables 'app/Codex.exe'
+
+        & $script -MsixPath $newMsix -OutputDir $newPayload -MetadataPath $newMetadataPath | Out-Null
+        $newMetadata = Get-Content -LiteralPath $newMetadataPath -Raw | ConvertFrom-Json
+        Assert-True (Test-Path -LiteralPath (Join-Path $newPayload 'ChatGPT.exe')) 'prepare-payload must extract the new ChatGPT.exe manifest entry point'
+        Assert-True (Test-Path -LiteralPath (Join-Path $newPayload 'Codex.exe')) 'prepare-payload must preserve the new package updater trampoline'
+        Assert-True ($newMetadata.EntryPoint -eq 'app/ChatGPT.exe') 'new metadata EntryPoint must follow AppxManifest.xml'
+        Assert-True ($newMetadata.ExecutablePath -eq 'ChatGPT.exe') 'new metadata ExecutablePath must select ChatGPT.exe'
+        Assert-True ($newMetadata.ExecutableName -eq 'ChatGPT.exe') 'new metadata ExecutableName must select ChatGPT.exe instead of the updater trampoline'
 
         $badMsix = Join-Path $temp 'Wrong.Package_1.0.0.0_x64__test.Msix'
         New-TestMsix -Path $badMsix -PackageName 'Wrong.Package'
@@ -193,6 +235,34 @@ function Test-PreparePayloadScript {
             $rejected = $true
         }
         Assert-True $rejected 'prepare-payload must reject packages whose Identity Name is not OpenAI.Codex'
+
+        $invalidEntryCases = @(
+            @{ Name = 'missing'; Executable = 'app/Missing.exe'; Omit = $true; ApplicationEntryPoint = 'Windows.FullTrustApplication' },
+            @{ Name = 'extension'; Executable = 'app/ChatGPT.dll'; Omit = $false; ApplicationEntryPoint = 'Windows.FullTrustApplication' },
+            @{ Name = 'traversal'; Executable = 'app/../ChatGPT.exe'; Omit = $false; ApplicationEntryPoint = 'Windows.FullTrustApplication' },
+            @{ Name = 'absolute'; Executable = 'C:\ChatGPT.exe'; Omit = $false; ApplicationEntryPoint = 'Windows.FullTrustApplication' },
+            @{ Name = 'entrypoint'; Executable = 'app/ChatGPT.exe'; Omit = $false; ApplicationEntryPoint = 'Other.EntryPoint' }
+        )
+        foreach ($case in $invalidEntryCases) {
+            $invalidMsix = Join-Path $temp "$($case.Name).msix"
+            New-TestMsix `
+                -Path $invalidMsix `
+                -PackageName 'OpenAI.Codex' `
+                -Executable $case.Executable `
+                -ApplicationEntryPoint $case.ApplicationEntryPoint `
+                -OmitManifestExecutable:$case.Omit
+
+            $invalidRejected = $false
+            try {
+                & $script `
+                    -MsixPath $invalidMsix `
+                    -OutputDir (Join-Path $temp "$($case.Name)-payload") `
+                    -MetadataPath (Join-Path $temp "$($case.Name).json") | Out-Null
+            } catch {
+                $invalidRejected = $true
+            }
+            Assert-True $invalidRejected "prepare-payload must reject invalid manifest executable case '$($case.Name)'"
+        }
     } finally {
         if (Test-Path -LiteralPath $temp) {
             Remove-Item -LiteralPath $temp -Recurse -Force
@@ -249,16 +319,18 @@ function Test-BuildInstallerScript {
     }
 
     $text = Get-Content -LiteralPath $script -Raw -Encoding UTF8
-    Assert-Contains $text 'CodexPortable-x64-\$effectiveVersion\.zip' 'build script must create a versioned portable ZIP path'
+    Assert-Contains $text 'ChatGPTPortable-x64-\$effectiveVersion\.zip' 'build script must create a versioned portable ZIP path'
     Assert-Contains $text 'CreateFromDirectory\(\s*\$payloadDir,\s*\$portablePath' 'build script must zip the extracted payload directory for portable builds'
     Assert-Contains $text 'new-installer-icon\.ps1' 'build script must invoke the installer icon generator'
     Assert-Contains $text '-IconAssetsDir\s+\$iconAssetsDir' 'build script must extract root icon assets separately from the payload'
     Assert-Contains $text '/DINSTALLER_ICON=\$installerIconPath' 'build script must pass the generated assets icon to NSIS'
+    Assert-Contains $text '/DAPP_EXECUTABLE=\$applicationExecutable' 'build script must pass the manifest executable path to NSIS'
+    Assert-Contains $text '/DAPP_EXECUTABLE_NAME=\$applicationExecutableName' 'build script must pass the manifest executable name to NSIS'
     Assert-Contains $text '\$portableHash\s*=\s*Get-FileHash' 'build script must calculate the portable ZIP SHA256'
     Assert-Contains $text '\$portableHash\.Hash\)\s+ \$\(Split-Path -Leaf \$portablePath\)' 'checksums.txt must include the portable ZIP hash'
     Assert-Contains $text 'PortablePath\s*=\s*\$portablePath' 'build script result must expose PortablePath to the workflow'
-    Assert-Contains $text 'CodexPortable-x64-' 'release notes must mention the portable ZIP artifact'
-    Assert-Contains $text '# Codex Windows \$effectiveVersion' 'release notes must use the concise Codex Windows title'
+    Assert-Contains $text 'ChatGPTPortable-x64-' 'release notes must mention the portable ZIP artifact'
+    Assert-Contains $text '# ChatGPT Windows \$effectiveVersion' 'release notes must use the concise ChatGPT Windows title'
     Assert-Contains $text 'ConvertFromUtf32\(0x1F4E6\)' 'release notes must define the package emoji by code point'
     Assert-Contains $text 'ConvertFromUtf32\(0x2705\)' 'release notes must define the checksum emoji by code point'
     Assert-Contains $text 'ConvertFromUtf32\(0x26A0\)' 'release notes must define the warning emoji by code point'
@@ -270,6 +342,8 @@ function Test-BuildInstallerScript {
     Assert-Contains $text '\u516c\u5171\u684c\u9762\u5feb\u6377\u65b9\u5f0f' 'release notes must document the all-users desktop shortcut'
     Assert-Contains $text 'EXE SHA256: \$\(\$installerHash\.Hash\)' 'release notes must include the installer SHA256'
     Assert-Contains $text 'ZIP SHA256: \$\(\$portableHash\.Hash\)' 'release notes must include the portable ZIP SHA256'
+    Assert-Contains $text 'ExecutablePath\s*=\s*\$applicationExecutable' 'build script result must expose the manifest executable path'
+    Assert-Contains $text 'ExecutableName\s*=\s*\$applicationExecutableName' 'build script result must expose the manifest executable name'
     Assert-NotContains $text 'MSIX package identity' 'release notes must omit verbose MSIX metadata'
 }
 
@@ -338,19 +412,26 @@ function Test-NsisScriptContent {
 
     $text = Get-Content -LiteralPath $path -Raw
     Assert-Contains $text '(?m)^\s*RequestExecutionLevel\s+admin\b' 'NSIS installer must require admin elevation'
-    Assert-Contains $text ([regex]::Escape('InstallDir "$PROGRAMFILES64\Codex"')) 'NSIS installer must default to %ProgramFiles%\Codex'
+    Assert-Contains $text ([regex]::Escape('InstallDir "$PROGRAMFILES64\ChatGPT"')) 'NSIS installer must default to %ProgramFiles%\ChatGPT'
     Assert-Contains $text ([regex]::Escape('WriteRegStr HKLM "Software\Classes\codex" "URL Protocol" ""')) 'NSIS installer must register codex: URL protocol'
     Assert-Contains $text 'WriteUninstaller' 'NSIS installer must generate an uninstaller'
-    Assert-Contains $text 'CreateShortCut\s+"\$SMPROGRAMS\\Codex\\Codex\.lnk"' 'NSIS installer must create an all-users Start Menu shortcut'
-    Assert-Contains $text 'CreateShortCut\s+"\$DESKTOP\\Codex\.lnk"[^\r\n]+"\$INSTDIR\\Codex\.ico"\s+0' 'NSIS installer must create an all-users desktop shortcut with the generated icon'
-    Assert-Contains $text 'CreateShortCut\s+"\$DESKTOP\\Codex\.lnk"[^\r\n]+"\$INSTDIR\\Codex\.exe"\s+0' 'NSIS installer must create an all-users desktop shortcut with the executable icon fallback'
-    Assert-Contains $text 'Delete\s+"\$DESKTOP\\Codex\.lnk"' 'NSIS uninstaller must remove the all-users desktop shortcut'
+    Assert-Contains $text 'CreateShortCut\s+"\$SMPROGRAMS\\ChatGPT\\ChatGPT\.lnk"[^\r\n]+\$\{APP_EXECUTABLE\}' 'NSIS installer must create an all-users Start Menu shortcut for the manifest executable'
+    Assert-Contains $text 'CreateShortCut\s+"\$DESKTOP\\ChatGPT\.lnk"[^\r\n]+\$\{APP_EXECUTABLE\}' 'NSIS installer must create an all-users desktop shortcut for the manifest executable'
+    Assert-Contains $text 'Delete\s+"\$DESKTOP\\ChatGPT\.lnk"' 'NSIS uninstaller must remove the all-users desktop shortcut'
     Assert-Contains $text '!define\s+MUI_ICON\s+"\$\{INSTALLER_ICON\}"' 'NSIS installer UI must use the generated assets icon'
     Assert-Contains $text '!define\s+MUI_UNICON\s+"\$\{INSTALLER_ICON\}"' 'NSIS uninstaller UI must use the generated assets icon'
-    Assert-Contains $text 'File\s+/oname=Codex\.ico\s+"\$\{INSTALLER_ICON\}"' 'NSIS installer must install the generated assets icon'
-    Assert-Contains $text 'CreateShortCut[^\r\n]+"\$INSTDIR\\Codex\.ico"\s+0' 'Start Menu shortcut must use the generated assets icon'
-    Assert-Contains $text 'DefaultIcon[^\r\n]+Codex\.ico' 'codex protocol must use the generated assets icon'
-    Assert-Contains $text 'DisplayIcon[^\r\n]+Codex\.ico' 'uninstall entry must use the generated assets icon'
+    Assert-Contains $text 'File\s+/oname=ChatGPT\.ico\s+"\$\{INSTALLER_ICON\}"' 'NSIS installer must install the generated assets icon'
+    Assert-Contains $text 'CreateShortCut[^\r\n]+"\$INSTDIR\\ChatGPT\.ico"\s+0' 'Start Menu shortcut must use the generated assets icon'
+    Assert-Contains $text 'DefaultIcon[^\r\n]+ChatGPT\.ico' 'registered handlers must use the generated assets icon'
+    Assert-Contains $text 'DisplayIcon[^\r\n]+ChatGPT\.ico' 'uninstall entry must use the generated assets icon'
+    Assert-Contains $text '!ifndef\s+APP_EXECUTABLE' 'NSIS installer must require a manifest executable define'
+    Assert-Contains $text '\$INSTDIR\\\$\{APP_EXECUTABLE\}' 'NSIS installer must target the manifest executable'
+    Assert-NotContains $text '\$INSTDIR\\Codex\.exe' 'NSIS installer must not launch the updater trampoline directly'
+    Assert-Contains $text 'APP_SKILL_PROGID\s+"ChatGPT\.skill"' 'NSIS installer must define a ChatGPT .skill ProgID'
+    Assert-Contains $text 'Software\\Classes\\\.skill\\OpenWithProgids' 'NSIS installer must add ChatGPT to .skill Open With handlers'
+    Assert-Contains $text 'SupportedTypes"\s+"\.skill"' 'NSIS installer must register .skill as a supported type'
+    Assert-NotContains $text ([regex]::Escape('WriteRegStr HKLM "Software\Classes\.skill" ""')) 'NSIS installer must not take over the .skill default handler'
+    Assert-Contains $text 'SHChangeNotify' 'NSIS installer must notify Explorer after file association changes'
     Assert-NotContains $text 'resources\\icon\.ico' 'NSIS installer must not depend on the removed app/resources/icon.ico file'
     Assert-Contains $text '!insertmacro\s+MUI_LANGUAGE\s+"SimpChinese"' 'NSIS installer must use Simplified Chinese UI language'
     Assert-Contains $text '(?m)^\s*SetCompressor\s+zlib\s*$' 'NSIS installer must use zlib as the speed/size compression compromise'
@@ -374,6 +455,11 @@ function Test-CiScriptGuard {
     Assert-Contains $text 'Start-Process' 'CI installer test script must install via Start-Process'
     Assert-Contains $text 'UninstallString' 'CI installer test script must verify the uninstall registry entry'
     Assert-Contains $text 'Software\\Classes\\codex' 'CI installer test script must verify codex: protocol registration'
+    Assert-Contains $text 'ExpectedExecutablePath' 'CI installer test script must accept the manifest executable path'
+    Assert-Contains $text 'Software\\Classes\\ChatGPT\.skill' 'CI installer test script must verify the .skill ProgID'
+    Assert-Contains $text 'OpenWithProgids' 'CI installer test script must verify .skill Open With registration'
+    Assert-Contains $text 'skillDefaultBefore' 'CI installer test script must preserve the existing .skill default handler'
+    Assert-Contains $text 'legacySentinel' 'CI installer test script must verify the legacy Codex installation is preserved'
     Assert-Contains $text 'CommonDesktopDirectory' 'CI installer test script must resolve the all-users desktop directory'
     Assert-Contains $text 'Test-Path\s+-LiteralPath\s+\$desktopShortcut' 'CI installer test script must verify the desktop shortcut after installation'
     Assert-Contains $text 'Wait-Until\s+-Condition\s+\{\s*-not\s+\(Test-Path\s+-LiteralPath\s+\$desktopShortcut\)' 'CI installer test script must verify the desktop shortcut is removed after uninstall'
@@ -391,7 +477,7 @@ function Test-WorkflowContent {
     }
 
     $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-    Assert-Contains $text 'name:\s*[\u4e00-\u9fff]+ Codex Windows [\u4e00-\u9fff]+' 'release workflow name must be Chinese'
+    Assert-Contains $text 'name:\s*[\u4e00-\u9fff]+ ChatGPT Windows [\u4e00-\u9fff]+' 'release workflow name must use the ChatGPT brand in Chinese'
     Assert-Contains $text 'cron:\s*''0 \* \* \* \*''' 'release workflow must check for Codex updates every hour'
     Assert-Contains $text 'workflow_dispatch:' 'release workflow must support manual workflow_dispatch'
     Assert-Contains $text 'msix_url:' 'release workflow must expose an optional msix_url input'
@@ -401,8 +487,11 @@ function Test-WorkflowContent {
     Assert-Contains $text 'scripts/test-installer-ci\.ps1' 'release workflow must call scripts/test-installer-ci.ps1'
     Assert-Contains $text 'gh\s+@releaseArgs' 'release workflow must publish assets with gh release create arguments'
     Assert-Contains $text 'PORTABLE_PATH=\$\(.*PortablePath' 'release workflow must export the portable ZIP path from the build result'
+    Assert-Contains $text 'APP_EXECUTABLE_PATH=\$\(.*ExecutablePath' 'release workflow must export the manifest executable path'
+    Assert-Contains $text '-ExpectedExecutablePath\s+"\$env:APP_EXECUTABLE_PATH"' 'release workflow must pass the manifest executable path to CI verification'
     Assert-Contains $text '\$\{\{ env\.PORTABLE_PATH \}\}' 'release workflow must upload the portable ZIP as a workflow artifact'
-    Assert-Contains $text 'portableAsset\s*=\s*"\$env:PORTABLE_PATH#CodexPortable-x64-\$env:VERSION\.zip"' 'release workflow must publish the portable ZIP as a release asset'
+    Assert-Contains $text 'portableAsset\s*=\s*"\$env:PORTABLE_PATH#ChatGPTPortable-x64-\$env:VERSION\.zip"' 'release workflow must publish the ChatGPT portable ZIP as a release asset'
+    Assert-Contains $text 'installerAsset\s*=\s*"\$env:INSTALLER_PATH#ChatGPTSetup-x64-\$env:VERSION\.exe"' 'release workflow must publish the ChatGPT installer as a release asset'
     Assert-NotContains $text 'checksumsAsset\s*=\s*"\$env:CHECKSUMS_PATH#checksums\.txt"' 'release workflow must not publish checksums.txt as a GitHub Release asset'
     Assert-Contains $text 'releases/tags/\$tag' 'release workflow must check existing releases through the GitHub Releases API'
     Assert-Contains $text '\$releaseResponse\.StatusCode\s+-eq\s+200' 'release workflow must treat HTTP 200 as an existing release'

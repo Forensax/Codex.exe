@@ -1,4 +1,4 @@
-name: 构建 Codex Windows 安装器
+name: 构建 ChatGPT Windows 安装器
 
 on:
   schedule:
@@ -182,18 +182,23 @@ jobs:
           "PORTABLE_PATH=$($result.PortablePath)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHECKSUMS_PATH=$($result.ChecksumsPath)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "RELEASE_NOTES_PATH=$($result.ReleaseNotesPath)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APP_EXECUTABLE_PATH=$($result.ExecutablePath)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APP_EXECUTABLE_NAME=$($result.ExecutableName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: 在 CI 中验证安装器
         if: ${{ env.SHOULD_BUILD != 'false' }}
         shell: pwsh
         run: |
-          ./scripts/test-installer-ci.ps1 -InstallerPath "$env:INSTALLER_PATH" -ExpectedVersion "$env:VERSION"
+          ./scripts/test-installer-ci.ps1 `
+            -InstallerPath "$env:INSTALLER_PATH" `
+            -ExpectedVersion "$env:VERSION" `
+            -ExpectedExecutablePath "$env:APP_EXECUTABLE_PATH"
 
       - name: 上传 workflow artifact
         if: ${{ env.SHOULD_BUILD != 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: CodexSetup-x64-${{ env.VERSION }}
+          name: ChatGPTSetup-x64-${{ env.VERSION }}
           path: |
             ${{ env.INSTALLER_PATH }}
             ${{ env.PORTABLE_PATH }}
@@ -220,13 +225,13 @@ jobs:
             $draft = $false
           }
 
-          $installerAsset = "$env:INSTALLER_PATH#CodexSetup-x64-$env:VERSION.exe"
-          $portableAsset = "$env:PORTABLE_PATH#CodexPortable-x64-$env:VERSION.zip"
+          $installerAsset = "$env:INSTALLER_PATH#ChatGPTSetup-x64-$env:VERSION.exe"
+          $portableAsset = "$env:PORTABLE_PATH#ChatGPTPortable-x64-$env:VERSION.zip"
           $releaseArgs = @(
             'release', 'create', $tag,
             $installerAsset,
             $portableAsset,
-            '--title', "Codex $env:VERSION",
+            '--title', "ChatGPT $env:VERSION",
             '--notes-file', $env:RELEASE_NOTES_PATH,
             '--target', $env:GITHUB_SHA
           )

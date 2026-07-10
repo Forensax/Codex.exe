@@ -69,7 +69,7 @@ if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
 }
 $payloadDir = Join-Path $buildRoot 'payload'
 $iconAssetsDir = Join-Path $buildRoot 'icon-assets'
-$installerIconPath = Join-Path $buildRoot 'Codex.ico'
+$installerIconPath = Join-Path $buildRoot 'ChatGPT.ico'
 $metadataPath = Join-Path $buildRoot 'metadata.json'
 
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
@@ -82,7 +82,7 @@ try {
     & $iconScript -AssetsDir $iconAssetsDir -OutputPath $installerIconPath | Out-Null
     $hasInstallerIcon = Test-Path -LiteralPath $installerIconPath
 } catch {
-    Write-Warning "Could not generate Codex.ico from MSIX assets. NSIS will use Codex.exe icons. $($_.Exception.Message)"
+    Write-Warning "Could not generate ChatGPT.ico from MSIX assets. NSIS will use the manifest application executable icon. $($_.Exception.Message)"
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Version) -and $metadata.Version -ne $Version) {
@@ -90,8 +90,14 @@ if (-not [string]::IsNullOrWhiteSpace($Version) -and $metadata.Version -ne $Vers
 }
 
 $effectiveVersion = $metadata.Version
-$installerPath = Join-Path $outFullPath "CodexSetup-x64-$effectiveVersion.exe"
-$portablePath = Join-Path $outFullPath "CodexPortable-x64-$effectiveVersion.zip"
+$applicationExecutable = [string]$metadata.ExecutablePath
+$applicationExecutableName = [string]$metadata.ExecutableName
+if ([string]::IsNullOrWhiteSpace($applicationExecutable) -or [string]::IsNullOrWhiteSpace($applicationExecutableName)) {
+    throw 'MSIX metadata did not provide a valid application executable.'
+}
+
+$installerPath = Join-Path $outFullPath "ChatGPTSetup-x64-$effectiveVersion.exe"
+$portablePath = Join-Path $outFullPath "ChatGPTPortable-x64-$effectiveVersion.zip"
 $releaseNotesPath = Join-Path $outFullPath 'release-notes.md'
 $checksumsPath = Join-Path $outFullPath 'checksums.txt'
 
@@ -106,6 +112,8 @@ $makensisArgs = @(
     '/V3',
     '/WX',
     "/DAPP_VERSION=$effectiveVersion",
+    "/DAPP_EXECUTABLE=$applicationExecutable",
+    "/DAPP_EXECUTABLE_NAME=$applicationExecutableName",
     "/DPAYLOAD_DIR=$payloadDir",
     "/DOUTPUT_EXE=$installerPath"
 )
@@ -156,19 +164,19 @@ $checkEmoji = [char]::ConvertFromUtf32(0x2705)
 $warningEmoji = [char]::ConvertFromUtf32(0x26A0) + [char]::ConvertFromUtf32(0xFE0F)
 
 $notes = @"
-# Codex Windows $effectiveVersion
+# ChatGPT Windows $effectiveVersion
 
 ## $packageEmoji 下载
-- $desktopEmoji 安装版：`CodexSetup-x64-$effectiveVersion.exe`
-- $luggageEmoji 便携版：`CodexPortable-x64-$effectiveVersion.zip`
+- $desktopEmoji 安装版：ChatGPTSetup-x64-$effectiveVersion.exe
+- $luggageEmoji 便携版：ChatGPTPortable-x64-$effectiveVersion.zip
 
 ## $checkEmoji 校验
 - EXE SHA256: $($installerHash.Hash)
 - ZIP SHA256: $($portableHash.Hash)
 
 ## $warningEmoji 注意
-- 安装版需要管理员权限，会创建开始菜单和公共桌面快捷方式，并写入卸载项和 `codex:` 协议。
-- 便携版解压即用，不写注册表、不创建快捷方式。
+- 安装版需要管理员权限，会创建开始菜单和公共桌面快捷方式，并写入卸载项、codex: 协议和 .skill 打开方式。
+- 便携版解压后运行 $applicationExecutable，不写注册表、不创建快捷方式。
 - $signingText
 "@
 
@@ -182,4 +190,6 @@ $notes | Set-Content -LiteralPath $releaseNotesPath -Encoding UTF8
     ReleaseNotesPath = $releaseNotesPath
     MetadataPath     = $metadataPath
     PayloadDir       = $payloadDir
+    ExecutablePath   = $applicationExecutable
+    ExecutableName   = $applicationExecutableName
 }

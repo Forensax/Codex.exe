@@ -110,6 +110,7 @@ try {
     $version = [string]$identity.GetAttribute('Version')
     $publisher = [string]$identity.GetAttribute('Publisher')
     $entryPoint = [string]$application.GetAttribute('Executable')
+    $applicationEntryPoint = [string]$application.GetAttribute('EntryPoint')
 
     if ($packageName -ne 'OpenAI.Codex') {
         throw "Unexpected package identity '$packageName'. Expected 'OpenAI.Codex'."
@@ -117,17 +118,35 @@ try {
     if ($architecture -ne 'x64') {
         throw "Unexpected package architecture '$architecture'. Expected 'x64'."
     }
-    if ($entryPoint -ne 'app/Codex.exe') {
-        throw "Unexpected application executable '$entryPoint'. Expected 'app/Codex.exe'."
+    if ($applicationEntryPoint -ne 'Windows.FullTrustApplication') {
+        throw "Unexpected application entry point '$applicationEntryPoint'. Expected 'Windows.FullTrustApplication'."
     }
-    $codexEntry = $zip.GetEntry('app/Codex.exe')
-    if ($null -eq $codexEntry) {
-        $codexEntry = $zip.Entries |
-            Where-Object { $_.FullName.Replace('\', '/') -eq 'app/Codex.exe' } |
+
+    $normalizedEntryPoint = $entryPoint.Replace('\', '/')
+    if (
+        [string]::IsNullOrWhiteSpace($normalizedEntryPoint) -or
+        -not $normalizedEntryPoint.StartsWith('app/', [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $normalizedEntryPoint.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase) -or
+        [System.IO.Path]::IsPathRooted($normalizedEntryPoint)
+    ) {
+        throw "Unsafe application executable '$entryPoint'. Expected a relative .exe path below app/."
+    }
+
+    $entrySegments = $normalizedEntryPoint.Split('/')
+    if ($entrySegments | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_ -eq '.' -or $_ -eq '..' }) {
+        throw "Unsafe application executable '$entryPoint'. Path traversal and empty path segments are not allowed."
+    }
+
+    $executableRelativePath = $normalizedEntryPoint.Substring(4).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+    $executableName = [System.IO.Path]::GetFileName($executableRelativePath)
+    $applicationExecutableEntry = $zip.GetEntry($normalizedEntryPoint)
+    if ($null -eq $applicationExecutableEntry) {
+        $applicationExecutableEntry = $zip.Entries |
+            Where-Object { $_.FullName.Replace('\', '/') -ieq $normalizedEntryPoint } |
             Select-Object -First 1
     }
-    if ($null -eq $codexEntry) {
-        throw "MSIX payload is missing app/Codex.exe."
+    if ($null -eq $applicationExecutableEntry) {
+        throw "MSIX payload is missing manifest application executable '$normalizedEntryPoint'."
     }
 
     foreach ($entry in $zip.Entries) {
@@ -181,6 +200,11 @@ try {
     $zip.Dispose()
 }
 
+$extractedExecutablePath = Get-FullPath (Join-Path $outputFullPath $executableRelativePath)
+if (-not (Test-Path -LiteralPath $extractedExecutablePath -PathType Leaf)) {
+    throw "Extracted payload is missing application executable: $extractedExecutablePath"
+}
+
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedMsixPath
 $signature = Get-AuthenticodeSignature -FilePath $resolvedMsixPath
 
@@ -189,7 +213,10 @@ $metadata = [PSCustomObject]@{
     Version                = $version
     Architecture           = $architecture
     Publisher              = $publisher
-    EntryPoint             = $entryPoint
+    EntryPoint             = $normalizedEntryPoint
+    ApplicationEntryPoint  = $applicationEntryPoint
+    ExecutablePath         = $executableRelativePath
+    ExecutableName         = $executableName
     DisplayName            = [string]$properties.DisplayName
     PublisherDisplayName   = [string]$properties.PublisherDisplayName
     MinVersion             = [string]$targetFamily.GetAttribute('MinVersion')
