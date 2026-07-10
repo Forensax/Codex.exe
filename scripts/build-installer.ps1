@@ -166,6 +166,8 @@ $warningEmoji = [char]::ConvertFromUtf32(0x26A0) + [char]::ConvertFromUtf32(0xFE
 $notes = @"
 # ChatGPT Windows $effectiveVersion
 
+> 提示：Codex 已经合并到 ChatGPT，后续版本统一使用 ChatGPT 命名。
+
 ## $packageEmoji 下载
 - $desktopEmoji 安装版：ChatGPTSetup-x64-$effectiveVersion.exe
 - $luggageEmoji 便携版：ChatGPTPortable-x64-$effectiveVersion.zip

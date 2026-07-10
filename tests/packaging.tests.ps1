@@ -164,6 +164,7 @@ function Test-ReadmeContent {
 
     $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
     Assert-Contains $text '# ChatGPT Windows' 'README must have a project title'
+    Assert-Contains $text 'Codex\s+\u5df2\u7ecf\u5408\u5e76\u5230\s+ChatGPT' 'README must explain the ChatGPT naming transition'
     Assert-Contains $text '[\u4e00-\u9fff]' 'README must contain Chinese text'
     Assert-Contains $text '\u6bcf\u5c0f\u65f6|1\s*\u5c0f\u65f6|\u4e00\u5c0f\u65f6' 'README must document the hourly version check'
     Assert-Contains $text '\u6ca1\u6709\u65b0\u7248\u672c' 'README must document that scheduled runs stop when no new version exists'
@@ -331,6 +332,7 @@ function Test-BuildInstallerScript {
     Assert-Contains $text 'PortablePath\s*=\s*\$portablePath' 'build script result must expose PortablePath to the workflow'
     Assert-Contains $text 'ChatGPTPortable-x64-' 'release notes must mention the portable ZIP artifact'
     Assert-Contains $text '# ChatGPT Windows \$effectiveVersion' 'release notes must use the concise ChatGPT Windows title'
+    Assert-Contains $text 'Codex\s+\u5df2\u7ecf\u5408\u5e76\u5230\s+ChatGPT' 'release notes must explain the ChatGPT naming transition'
     Assert-Contains $text 'ConvertFromUtf32\(0x1F4E6\)' 'release notes must define the package emoji by code point'
     Assert-Contains $text 'ConvertFromUtf32\(0x2705\)' 'release notes must define the checksum emoji by code point'
     Assert-Contains $text 'ConvertFromUtf32\(0x26A0\)' 'release notes must define the warning emoji by code point'

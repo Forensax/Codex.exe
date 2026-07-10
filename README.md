@@ -2,6 +2,8 @@
 
 这个仓库用于把 Microsoft Store 的 `OpenAI.Codex` MSIX 包重新封装为传统 Windows EXE 安装器和便携版，并通过 GitHub Actions 自动发布到 GitHub Release。
 
+> 提示：Codex 已经合并到 ChatGPT，后续版本统一使用 ChatGPT 命名。
+
 ## 工作方式
 
 - 每小时自动检查一次 `OpenAI.Codex` Retail x64 MSIX 是否有新版本。
