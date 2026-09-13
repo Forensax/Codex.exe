@@ -1,3 +1,5 @@
+
+
 # ChatGPT Windows 安装包自动构建
 
 这个仓库用于把 Microsoft Store 的 `OpenAI.Codex` MSIX 包重新封装为传统 Windows EXE 安装器和便携版，并通过 GitHub Actions 自动发布到 GitHub Release。
@@ -33,6 +35,7 @@
 2. 选择 `构建 ChatGPT Windows 安装器`。
 3. 点击 `Run workflow`。
 4. 如果自动解析 MSIX 失败，在 `msix_url` 中填写 OpenAI.Codex x64 Retail MSIX 直链。
+5. 手动运行默认创建草稿 Release；如需正式发布，将 `draft` 设为 `false`。
 
 本地静态测试：
 
